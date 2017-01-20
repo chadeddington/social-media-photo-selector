@@ -24,9 +24,7 @@
     "fs-button": "jshcrowthe/fs-button",
     "iron-image": "PolymerElements/iron-image#~1.2.5",
     "layout": "Polymer/layout",
-    "fs-styles": "fs-webdev/fs-styles#~2.2.0",
-    "iron-scroll-threshold": "PolymerElements/iron-scroll-threshold#~1.0.3",
-    "iron-ajax": "PolymerElements/iron-ajax#~1.4.3"
+    "fs-styles": "fs-webdev/fs-styles#~2.2.0"
   },
   "devDependencies": {
     "iron-component-page": "PolymerElements/iron-component-page#^1.0.0",
