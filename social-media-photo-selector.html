@@ -1,0 +1,460 @@
+<!--
+@license
+Copyright (c) 2015 The Polymer Project Authors. All rights reserved.
+This code may only be used under the BSD style license found at http://polymer.github.io/LICENSE.txt
+The complete set of authors may be found at http://polymer.github.io/AUTHORS.txt
+The complete set of contributors may be found at http://polymer.github.io/CONTRIBUTORS.txt
+Code distributed by Google as part of the polymer project is also
+subject to an additional IP rights grant found at http://polymer.github.io/PATENTS.txt
+-->
+
+<link rel="import" href="../polymer/polymer.html">
+<link rel="import" href="../fs-button/fs-button.html">
+<link rel="import" href="../cedar-dialog/cedar-dialog.html">
+<link rel="import" href="../iron-list/iron-list.html">
+<link rel="import" href="../iron-image/iron-image.html">
+<link rel="import" href="../layout/layout.html">
+<link rel="import" href="../fs-styles/fs-styles.html">
+
+<!--
+An element the allows a user to view their photos on Facebook or Instagram and select the urls
+that they would like to return
+
+Example:
+
+    <social-media-photo-selector></social-media-photo-selector>
+
+Example:
+    <social-media-photo-selector>
+    </social-media-photo-selector>
+
+@demo demo/index.html
+@hero hero.svg
+-->
+
+<dom-module id="social-media-photo-selector">
+  <style include='fs-styles'></style>
+  <link rel="import" type="css" href="social-media-photo-selector.css">
+  <template>
+    <cedar-dialog id='modal' modal full-width>
+      <!-- header -->
+      <h4 header id='modal-title'>Facebook Photos</h4>
+      <!-- main -->
+      <div class='content' main>
+        <iron-list id='iron-list' class='iron-list' 
+          items="{{photos}}" 
+          grid
+          selected-items='{{selectedItems}}'
+          selection-enabled
+          multi-selection>
+          <template>
+            <div class='item-container'>
+              <div class='item' selected$='[[selected]]' index='[[index]]' on-tap='_tryShiftSelect'>
+                <iron-image sizing="cover" class="thumbnail" src="[[item.thumbUrl]]"></iron-image>
+                <!-- description or title -->
+                <div class='title'>[[item.title]]</div>
+              </div>
+              <i class='check-icon'></i>
+            </div> 
+          </template>
+        </iron-list>
+      </div>
+      <!-- footer -->
+      <div footer class='layout horizontal justified'>
+        <div>
+          <button is='fs-button' option='recommended' on-tap='_tryGetBlobs'>
+            Upload
+          </button>
+          <button is='fs-button' option='minor' dialog-dismiss>
+            Cancel
+          </button>
+        </div>
+        <div class="layout horizontal center center-justified selected-count-string">
+          <span class='selected-count'>[[selectedItems.length]]</span> Selected
+        </div>
+      </div>
+    </cedar-dialog>
+
+  </template>
+
+  <script>
+    Polymer({
+      is: 'social-media-photo-selector',
+
+      properties: {
+        /**
+         * An array of objects containing the photo details
+         * @type {Array}
+         */
+        photos: {
+          type: Array,
+          value: [],
+          notify: true
+        },
+        /**
+         * Instagram auth token
+         * @type String
+         */
+        _igToken: {
+          type: String,
+          value: ''
+        },
+        /**
+         * Facebook auth token
+         * @type String
+         */
+        _fbToken: {
+          type: String,
+          value: ''
+        },
+        /**
+         * Array of items that were selected
+         * @type {Array}
+         */
+        selectedItems: {
+          type: Array,
+          notify: true
+        },
+        /**
+         * The next paginated endpoint
+         * @type {String}
+         */
+        _nextPage: {
+          type: String,
+          value: ''
+        },
+        /**
+         * The current view ie: Facebook or Instagram
+         * @type {Object}
+         */
+        view: {
+          type: String,
+          value: ''
+        },
+        _fbCache: {
+          type: Array,
+          value: function() {
+            return [];
+          }
+        },
+        _igCache: {
+          type: Array,
+          value: function() {
+            return [];
+          }
+        }
+      },
+
+      ready: function() {
+        // Initialize the Facebook SDK
+        window.fbAsyncInit = function() {
+          FB.init({
+            appId      : '1171064549637797',
+            xfbml      : true,
+            version    : 'v2.8'
+          });
+          FB.AppEvents.logPageView();
+        };
+        (function(d, s, id){
+           var js, fjs = d.getElementsByTagName(s)[0];
+           if (d.getElementById(id)) {return;}
+           js = d.createElement(s); js.id = id;
+           js.src = "//connect.facebook.net/en_US/sdk.js";
+           fjs.parentNode.insertBefore(js, fjs);
+         }(document, 'script', 'facebook-jssdk'));
+
+        // The global callback given to Instagram's JSONP request
+          window.handleInstagramResponse = function(response) {
+            console.log('Instagram Response', response.pagination);
+            var resEvent = new CustomEvent('ig-response', { 'detail': response });
+            window.dispatchEvent(resEvent);
+          }
+        // Get the token from Instagram login window
+        window.onmessage = function(e) {
+          if (e.origin !== 'http://localhost:8080') return;
+          if (!e.data) {
+            // handle error
+            console.log('There was an error authorizing your account');
+            return;
+          }
+          this._igToken = e.data;
+          this._igGetPhotos();
+        }.bind(this);
+
+        // Listen for the event to get the response
+        this.listen(window, 'ig-response', '_handleIGResponse');
+        // Listen for the scroll event
+        this.listen(this.$['iron-list'], 'scroll', '_handleScroll');
+      },
+
+      /****************************
+      *     FACEBOOK API 
+      ****************************/
+      /**
+       * Trigger the facebook flow
+       */
+      fbLogin: function() {
+        // Set the view
+        this.$['modal-title'].innerText = 'Facebook Photos';
+        this.view = 'facebook';
+        // Check the cache
+        if (this._fbCache.length) {
+          this.photos = this._fbCache;
+          this.open()
+        } else {
+          var _this = this;
+          if (this._fbToken) {
+            _this._fbGetPhotos();
+          } else {
+            // Popup blockers shouldn't block the pop up if it is
+            // called as a direct result of clicking a button
+            FB.login(function(loginResponse) {
+              _this._fbGetPhotos();
+            }, {scope: 'user_photos'});
+          }
+        }
+      },
+      /**
+       * Generate the API request to Facebook for uploaded photos
+       */
+      _fbGetPhotos: function() {
+        var _this = this;
+        var photoIds = [];
+        
+        FB.api('/me/photos/uploaded', 'get', {fields: "id, name, images"}, function(response) {
+          console.log('Facebook Response', response);
+          var fbPhotos = [];
+          response.data.forEach(function(img, index) {
+            var details = {};
+            details.thumbUrl = img.images[img.images.length - 1].source;
+            details.url = img.images[0].source;
+            details.index = index;
+            details.title = img.name || '';
+            fbPhotos.push(details);
+          });
+          _this._nextPage = (response.paging.next) ? response.paging.cursors.after : '';
+          _this.photos = fbPhotos;
+          _this._fbCache = _this.photos;
+          _this.open();
+          // if (response && Array.isArray(response.data)) {
+          //   response.data.forEach(function(photo) {
+          //     photoIds.push(photo.id);
+          //   });
+          //   _this._getPhotos(photoIds);
+          // }
+        });
+      },
+      /**
+       * Handle paginated requests
+       */
+      _loadNextFBPage: function() {
+        var _this = this;
+        if (this._nextPage) {
+          var fbPhotos = [];
+          var currentLength = this.photos.length;
+          FB.api('/me/photos/uploaded', 'get', {fields: "id, name, images", after: _this._nextPage}, function(response) {
+            response.data.forEach(function(img, index) {
+              var details = {};
+              details.thumbUrl = img.images[img.images.length - 1].source;
+              details.url = img.images[0].source;
+              details.index = index + currentLength ;
+              details.title = img.name || '';
+              _this.push('photos', details);
+            });
+            _this._nextPage = (response.paging.next) ? response.paging.cursors.after : '';
+            _this._fbCache = _this.photos;
+          });
+        }
+      },
+      /*************************
+      *      INSTAGRAM API
+      * *************************
+      /**
+       * Trigger the Instagram flow
+       */
+      igLogin: function() {
+        this.$['modal-title'].innerText = 'Instagram Photos';
+        this.view = 'instagram';
+        // Check the cache
+        if (this._igCache.length) {
+          this.photos = this._igCache;
+          this.open();
+          return;
+        }
+        // Do we already have the token?
+        if (this._igToken) {
+          this._igGetPhotos();
+        } else {
+          // Set position of the Instagram login popup window
+          var dualScreenLeft = window.screenLeft != undefined ? window.screenLeft : screen.left;
+          var dualScreenTop = window.screenTop != undefined ? window.screenTop : screen.top;
+          var width = window.innerWidth ? window.innerWidth : document.documentElement.clientWidth ? document.documentElement.clientWidth : screen.width;
+          var height = window.innerHeight ? window.innerHeight : document.documentElement.clientHeight ? document.documentElement.clientHeight : screen.height;
+          w = width > 400 ? 400 : width;
+          h = height > 300 ? 300 : height;
+          var left = ((width / 2) - (w / 2)) + dualScreenLeft;
+          var top = ((height / 2) - (h / 2)) + dualScreenTop;
+          // Open the window
+          window.open("https://api.instagram.com/oauth/authorize/?client_id=1853405436aa4ba4a819313661868079&redirect_uri=http://localhost:8080/components/social-media-photo-selector/demo/igRedirect.html&response_type=token", "Instagram", 'scrollbars=yes, width=' + w + ', height=' + h + ', top=' + top + ', left=' + left);
+        }
+      },
+      /**
+       * Fetch the photos from Instagram
+       * @param  {String} src [The endpoint to get the photos from]
+       */
+      _igGetPhotos: function(src) {
+        var currentScript = document.querySelector('#instagram-jsonp');
+        if (currentScript) {
+          // TODO: Investigate if we can change the src and have it trigger
+          currentScript.src = '';
+        } else {
+          var script = document.createElement('script');
+          script.setAttribute('id', 'instagram-jsonp');
+          script.src = "https://api.instagram.com/v1/users/self/media/recent/?access_token=" + this._igToken + "&callback=handleInstagramResponse";
+          document.querySelector('head').appendChild(script);
+        }
+      },
+      /**
+       * The callback to handle the response from the JSONP request
+       * 
+       */
+      _handleIGResponse: function(e) {
+        var igPhotos = [];
+        e.detail.data.forEach(function(img, index) {
+          var details = {};
+          details.url = img.images.standard_resolution.url;
+          details.thumbUrl = img.images.standard_resolution.url;
+          details.title = img.caption ? img.caption.text : '';
+          details.index = index;
+          igPhotos.push(details);
+        });
+        this.photos = this._igCache = igPhotos;
+        this.open();
+      },
+      /**
+       * Handle a shift click select
+       * @param  {Event} e The tap event
+       */
+      _tryShiftSelect: function(e) {
+        if (!this.selectedItems || 
+            !this.selectedItems.length ||
+            !e ||
+            !e.detail ||
+            !e.detail.sourceEvent ||
+            !e.detail.sourceEvent.shiftKey) return;
+        // The first item before the currently clicked item
+        // is added to the selectedItems array
+        var prevFirstIndex = this.selectedItems[0].index;
+        // Using async ensures that the currently clicked item
+        // is in the selectedItems arra
+        this.async(function() {
+          // Sort the array so the indexs are accurate 
+          this.selectedItems.sort(function(a,b) {
+            return a.index - b.index;
+          });
+          // Reference indexs
+          var firstIndex = this.selectedItems[0].index;
+          var lastIndex = this.selectedItems[this.selectedItems.length - 1].index;
+          var clickedIndex = Polymer.dom(e).event.model.item.index;
+          // Clear the selection
+          this.$['iron-list'].clearSelection();
+          // If the user clicks a selection ahead of the first index
+          if (clickedIndex < lastIndex && clickedIndex >= prevFirstIndex) {
+            for (var i = firstIndex; i <= clickedIndex; i++) {
+              this.$['iron-list'].selectItem(i);
+            }
+          } else {
+            for (var i = firstIndex; i <= lastIndex; i++) {
+              this.$['iron-list'].selectItem(i);
+            }
+          }
+        });
+      },
+      /**
+       * when the user scrolls to the bottom of the view
+       * check if another request needs to be made for more
+       * images
+       */
+      _handleScroll: function(e) {
+        var _this = this;
+        var height = this.$['iron-list'].getBoundingClientRect().height
+        this.debounce('scroll', function() {
+          if (_this.$['iron-list'].scrollHeight < _this.$['iron-list'].scrollTop + height + 100) {
+            if (_this.view === 'facebook') {
+              _this._loadNextFBPage()
+            }
+          }
+        }, 500);
+      },
+      /**
+       * Open the modal
+       */
+      open: function() {
+        // Make sure the view is scrolled back to the top
+        this.$.modal.open();
+        this.$['iron-list'].scrollTop = 0;
+      },
+      /**
+       * Try to get the image data for each url
+       */
+      _tryGetBlobs: function(e) {
+        var _this = this;
+        // Show a spinner to show that it's working
+        // Pull down the blobs
+        var blobs = [];
+        var promises = this.selectedItems.map(this._getBlob.bind(this));
+        var totalItems = promises.length;
+        var counter = 0;
+        promises.forEach(function(promise) {
+          promise.then(function(blob) {
+            blobs.push(blob);
+            counter++;
+            if (counter >= totalItems) {
+              _this.$.modal.close();
+              _this.$['iron-list'].clearSelection();
+              _this.fire('gallery-initiate-upload', {data: blobs});
+            }
+          }).catch(function(index) {
+            console.log('Item failed to download: ', index)
+            counter++;
+            if (counter >= totalItems) {
+              _this.$.modal.close();
+              _this.$['iron-list'].clearSelection();
+              _this.fire('gallery-initiate-upload', {data: blobs});
+            }
+          });
+        });
+      },
+
+      /**
+       * Grab the image data
+       */
+      _getBlob: function(item) {
+        var _this = this;
+        return new Promise(function(resolve, reject) {
+          var blob = null;
+          var xhr = new XMLHttpRequest(); 
+          xhr.open("GET", item.url); 
+          xhr.responseType = "blob";//force the HTTP response, response-type header to be blob
+          xhr.onload = function() 
+          {
+              blob = xhr.response;//xhr.response is now a blob object
+              if (xhr.status >= 400) return reject(item.index);
+              blob.title = _this.view + item.index;
+              return resolve(blob);
+              // console.log('blob ', blob);
+              // var myReader = new FileReader();
+              // myReader.readAsArrayBuffer(blob)
+              // myReader.addEventListener("loadend", function(e)
+              // {
+              //   var buffer = e.srcElement.result;//arraybuffer object
+              //   console.log('buffer', e)
+              // });
+          }
+          xhr.send();
+        });
+      }
+
+    });
+  </script>
+</dom-module>

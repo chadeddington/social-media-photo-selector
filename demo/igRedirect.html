@@ -1,0 +1,8 @@
+<h2>Instagram Redirect Page</h2>
+
+<script>
+	var accessToken = window.location.href.match(/(#access_token=)([^?/&]+)/)[2];
+
+	window.opener.postMessage(accessToken, 'http://localhost:8080/components/social-media-photo-selector/demo/');
+	window.close();
+</script>
